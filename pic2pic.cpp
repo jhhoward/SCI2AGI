@@ -21,7 +21,7 @@
 #define AGI_DISABLE_PRIORITY 0xf3
 #define AGI_FILL_INSTRUCTION 0xf8
 
-#define AGI_OFFSET_Y -5
+#define AGI_OFFSET_Y -6
 #define SCI_TO_AGI_X(x) ((x) / 2)
 #define SCI_TO_AGI_Y(y) ((y) + AGI_OFFSET_Y)
 #define AGI_TO_SCI_X(x) ((x) * 2)
@@ -126,11 +126,11 @@ void EmitAgiLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 	if(lastAgiInstruction != AGI_LINE_INSTRUCTION || lastX != x1 || lastY != y1)
 	{
 		EmitAgiInstruction(AGI_LINE_INSTRUCTION);	
-		WriteByte((uint8_t)(x1 / 2));
+		WriteByte((uint8_t)(x1));
 		WriteByte((uint8_t)(y1));
 	}
 		
-	WriteByte((uint8_t)(x2 / 2));
+	WriteByte((uint8_t)(x2));
 	WriteByte((uint8_t)(y2));
 	
 	lastX = x2;
@@ -186,6 +186,7 @@ void EmitAgiPixel(int16_t x, int16_t y, uint8_t visualColour, uint8_t priorityCo
 	WriteByte((uint8_t) y);
 }
 
+/*
 void WriteAgiCoords(int16_t x, int16_t y)
 {
 	if(x < 0 || y < 0 || x >= 320 || y >= 200)
@@ -201,6 +202,7 @@ void WriteAgiCoords(int16_t x, int16_t y)
 	WriteByte(outX);
 	WriteByte(outY);
 }
+*/
 
 void DrawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 {
@@ -213,30 +215,51 @@ void DrawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 		sciPriorityCanvas.DrawLine(x1, y1, x2, y2, priorityColour);
 	}
 	
+	x1 = SCI_TO_AGI_X(x1);
+	y1 = SCI_TO_AGI_Y(y1);
+	x2 = SCI_TO_AGI_X(x2);
+	y2 = SCI_TO_AGI_Y(y2);
+	
 	// Clip
+	if(y1 < 0 && y2 < 0)
+		return;
+	
 	if(y1 >= 168 && y2 >= 168)
 		return;
 	
 	if(y2 >= 168)
 	{
-		x2 = x1 + ((x2 - x1) * 167) / y2;
+		x2 = x1 + ((x2 - x1) * (167 - y1)) / (y2 - y1);
+//		x2 = x1 + ((x2 - x1) * 167) / y2;
 		y2 = 167;
 	}
 	if(y1 >= 168)
 	{
-		x1 = x2 + ((x1 - x2) * 167) / y1;
+		x1 = x2 + ((x1 - x2) * (167 - y2)) / (y1 - y2);
+		//x1 = x2 + ((x1 - x2) * 167) / y1;
 		y1 = 167;
+	}
+	
+	if(y1 < 0)
+	{
+		x1 = x1 + ((x2 - x1) * (0 - y1)) / (y2 - y1);
+		y1 = 0;
+	}
+	if(y2 < 0)
+	{
+		x2 = x2 + ((x1 - x2) * (0 - y2)) / (y1 - y2);
+		y2 = 0;
 	}
 	
 	EmitAgiLine(x1, y1, x2, y2);
 	
 	if(penColour != 0xff)
 	{
-		agiVisualCanvas.DrawLine(x1 / 2, y1, x2 / 2, y2, penColour);
+		agiVisualCanvas.DrawLine(x1, y1, x2, y2, penColour);
 	}
 	if(priorityColour != 0xff)
 	{
-		agiPriorityCanvas.DrawLine(x1 / 2, y1, x2 / 2, y2, priorityColour);
+		agiPriorityCanvas.DrawLine(x1, y1, x2, y2, priorityColour);
 	}
 }
 
@@ -552,7 +575,7 @@ bool CheckFilledCorrectly(vector<Coord>& agiFilled, vector<Coord>& sciFilled, Co
 		
 		for(Coord& s : sciFilled)
 		{
-			if(s.x / 2 == a.x && s.y == a.y)
+			if(SCI_TO_AGI_X(s.x) == a.x && SCI_TO_AGI_Y(s.y) == a.y)
 			{
 				hasMatch = true;
 				break;
@@ -574,7 +597,7 @@ void TryFill(Canvas& agiCanvas, Canvas& sciCanvas, vector<Coord>& sciFilled, int
 	
 	while(1)
 	{
-		agiCanvas.Fill(x / 2, y, fillColour, &agiFilled);
+		agiCanvas.Fill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y), fillColour, &agiFilled);
 		
 		Coord errorCoord;
 		if(CheckFilledCorrectly(agiFilled, sciFilled, errorCoord))
@@ -584,10 +607,10 @@ void TryFill(Canvas& agiCanvas, Canvas& sciCanvas, vector<Coord>& sciFilled, int
 
 		agiCanvas.UnFill(agiFilled);
 		
-		uint8_t gapPixel = sciCanvas.GetPixel(errorCoord.x * 2, errorCoord.y);
+		uint8_t gapPixel = sciCanvas.GetPixel(AGI_TO_SCI_X(errorCoord.x), AGI_TO_SCI_Y(errorCoord.y));
 		if(gapPixel == agiCanvas.defaultColour)
 		{
-			gapPixel = sciCanvas.GetPixel(errorCoord.x * 2 + 1, errorCoord.y);
+			gapPixel = sciCanvas.GetPixel(AGI_TO_SCI_X(errorCoord.x) + 1, AGI_TO_SCI_Y(errorCoord.y));
 		}
 		if(gapPixel == agiCanvas.defaultColour)
 		{
@@ -635,28 +658,28 @@ void DoFill(int16_t x, int16_t y)
 
 	EmitAgiSetVisual(fillColour);
 	EmitAgiSetPriority(fillPriority);
-	EmitAgiFill(x / 2, y);
+	EmitAgiFill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y));
 	
 	// Check everywhere is filled correctly
 	for(Coord& c : sciVisualFilled)
 	{
-		if(agiVisualCanvas.GetPixel(c.x / 2, c.y) == agiVisualCanvas.defaultColour)
+		if(agiVisualCanvas.GetPixel(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y)) == agiVisualCanvas.defaultColour)
 		{
 			TryFill(agiVisualCanvas, sciVisualCanvas, sciVisualFilled, c.x, c.y, fillColour, true, agiVisualFilled);
 			EmitAgiSetVisual(fillColour);
 			EmitAgiSetPriority(COLOUR_DISABLED);
-			EmitAgiFill(c.x / 2, c.y);
+			EmitAgiFill(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y));
 		}
 	}
 	
 	for(Coord& c : sciPriorityFilled)
 	{
-		if(agiPriorityCanvas.GetPixel(c.x / 2, c.y) == agiPriorityCanvas.defaultColour)
+		if(agiPriorityCanvas.GetPixel(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y)) == agiPriorityCanvas.defaultColour)
 		{
 			TryFill(agiPriorityCanvas, sciPriorityCanvas, sciPriorityFilled, c.x, c.y, fillPriority, true, agiPriorityFilled);
 			EmitAgiSetVisual(COLOUR_DISABLED);
 			EmitAgiSetPriority(fillPriority);
-			EmitAgiFill(c.x / 2, c.y);
+			EmitAgiFill(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y));
 		}
 	}
 	
@@ -846,6 +869,8 @@ int main(int argc, char* argv[])
 
 	sciVisualCanvas.DumpToPNG("sci-visual.png");
 	agiVisualCanvas.DumpToPNG("agi-visual.png");
+	sciPriorityCanvas.DumpToPNG("sci-priority.png");
+	agiPriorityCanvas.DumpToPNG("agi-priority.png");
 
 	return 0;
 }
