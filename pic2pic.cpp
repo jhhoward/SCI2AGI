@@ -60,22 +60,30 @@ struct Coord
 
 struct Canvas
 {
-	Canvas(int inWidth, int inHeight, uint8_t inDefaultColour);
+	Canvas(int inWidth, int inHeight, uint8_t priorityBlank = 4, uint8_t visualBlank = 0xf);
 	~Canvas();
 	
-	void SetPixel(int x, int y, uint8_t value);
-	uint8_t GetPixel(int x, int y);
+	void SetPixel(int x, int y);
+	uint8_t GetVisualPixel(int x, int y);
+	uint8_t GetPriorityPixel(int x, int y);
 	
-	void DrawLine(int x1, int y1, int x2, int y2, uint8_t colour);
-	void Fill(int x, int y, uint8_t colour, vector<Coord>* filled = nullptr);
-	void UnFill(vector<Coord>& filled);
+	void DrawLine(int x1, int y1, int x2, int y2);
+	void Fill(int x, int y, vector<Coord>* filled = nullptr);
+	void UndoFill();
 	bool OkToFill(int x, int y);
 	
-	void DumpToPNG(const char* filename);
+	void DumpToPNG(const char* visualFilename, const char* priorityFilename);
 	
 	int width, height;
-	uint8_t* data;
-	uint8_t defaultColour;
+	
+	uint8_t* visualData;
+	uint8_t* priorityData;
+	
+	uint8_t* lastVisualData;
+	uint8_t* lastPriorityData;
+			
+	uint8_t blankPriority;
+	uint8_t blankVisual;
 };
 
 uint8_t* pictureData;
@@ -93,10 +101,8 @@ uint8_t lastAgiInstruction = 0;
 
 FILE* outputFile;
 
-Canvas agiVisualCanvas(AGI_PICTURE_WIDTH, AGI_PICTURE_HEIGHT, 0xf);
-Canvas sciVisualCanvas(SCI_PICTURE_WIDTH, SCI_PICTURE_HEIGHT, 0xf);
-Canvas agiPriorityCanvas(AGI_PICTURE_WIDTH, AGI_PICTURE_HEIGHT, 4);
-Canvas sciPriorityCanvas(SCI_PICTURE_WIDTH, SCI_PICTURE_HEIGHT, 4);
+Canvas agiCanvas(AGI_PICTURE_WIDTH, AGI_PICTURE_HEIGHT);
+Canvas sciCanvas(SCI_PICTURE_WIDTH, SCI_PICTURE_HEIGHT);
 
 void WriteByte(uint8_t value)
 {
@@ -186,34 +192,9 @@ void EmitAgiPixel(int16_t x, int16_t y, uint8_t visualColour, uint8_t priorityCo
 	WriteByte((uint8_t) y);
 }
 
-/*
-void WriteAgiCoords(int16_t x, int16_t y)
-{
-	if(x < 0 || y < 0 || x >= 320 || y >= 200)
-	{
-		printf("Invalid coordinate: %d, %d\n", x, y);
-	}
-	
-	uint8_t outX = (uint8_t) (x / 2);
-	uint8_t outY = (uint8_t) y;
-	
-	if(outY >= 168)
-		outY = 167;
-	WriteByte(outX);
-	WriteByte(outY);
-}
-*/
-
 void DrawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 {
-	if(penColour != 0xff)
-	{
-		sciVisualCanvas.DrawLine(x1, y1, x2, y2, penColour);
-	}
-	if(priorityColour != 0xff)
-	{
-		sciPriorityCanvas.DrawLine(x1, y1, x2, y2, priorityColour);
-	}
+	sciCanvas.DrawLine(x1, y1, x2, y2);
 	
 	x1 = SCI_TO_AGI_X(x1);
 	y1 = SCI_TO_AGI_Y(y1);
@@ -253,14 +234,7 @@ void DrawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 	
 	EmitAgiLine(x1, y1, x2, y2);
 	
-	if(penColour != 0xff)
-	{
-		agiVisualCanvas.DrawLine(x1, y1, x2, y2, penColour);
-	}
-	if(priorityColour != 0xff)
-	{
-		agiPriorityCanvas.DrawLine(x1, y1, x2, y2, priorityColour);
-	}
+	agiCanvas.DrawLine(x1, y1, x2, y2);
 }
 
 uint8_t NextByte()
@@ -387,7 +361,7 @@ void SetPriorityColour()
 		}
 	}*/
 	
-	uint8_t agiBand = colour + 3;
+	uint8_t agiBand = colour + 2;
 	if(agiBand < 4)
 		agiBand = 4;
 	if(agiBand > 15)
@@ -592,12 +566,15 @@ bool CheckFilledCorrectly(vector<Coord>& agiFilled, vector<Coord>& sciFilled, Co
 	return true;
 }	
 
-void TryFill(Canvas& agiCanvas, Canvas& sciCanvas, vector<Coord>& sciFilled, int16_t x, int16_t y, uint8_t fillColour, bool isVisual, vector<Coord>& agiFilled)
+void TryFill(vector<Coord>& sciFilled, int16_t x, int16_t y)
 {
-	
+	uint8_t fillColour = penColour;
+	uint8_t fillPriority = priorityColour;
+	vector<Coord> agiFilled;
+
 	while(1)
 	{
-		agiCanvas.Fill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y), fillColour, &agiFilled);
+		agiCanvas.Fill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y), &agiFilled);
 		
 		Coord errorCoord;
 		if(CheckFilledCorrectly(agiFilled, sciFilled, errorCoord))
@@ -605,86 +582,63 @@ void TryFill(Canvas& agiCanvas, Canvas& sciCanvas, vector<Coord>& sciFilled, int
 			break;
 		}
 
-		agiCanvas.UnFill(agiFilled);
+		agiCanvas.UndoFill();
 		
-		uint8_t gapPixel = sciCanvas.GetPixel(AGI_TO_SCI_X(errorCoord.x), AGI_TO_SCI_Y(errorCoord.y));
-		if(gapPixel == agiCanvas.defaultColour)
-		{
-			gapPixel = sciCanvas.GetPixel(AGI_TO_SCI_X(errorCoord.x) + 1, AGI_TO_SCI_Y(errorCoord.y));
-		}
-		if(gapPixel == agiCanvas.defaultColour)
-		{
-			gapPixel = 0;
-		}
-		agiCanvas.SetPixel(errorCoord.x, errorCoord.y, gapPixel);
+		uint8_t visualGap = fillColour;
+		uint8_t priorityGap = fillPriority;
 		
-		if(isVisual)
+		if(visualGap != COLOUR_DISABLED)
 		{
-			EmitAgiPixel(errorCoord.x, errorCoord.y, gapPixel, COLOUR_DISABLED);
+			visualGap = sciCanvas.GetVisualPixel(AGI_TO_SCI_X(errorCoord.x), AGI_TO_SCI_Y(errorCoord.y));
+			if(visualGap == sciCanvas.blankVisual)
+			{
+				visualGap = sciCanvas.GetVisualPixel(AGI_TO_SCI_X(errorCoord.x) + 1, AGI_TO_SCI_Y(errorCoord.y));
+			}
+			if(visualGap == sciCanvas.blankVisual)
+			{
+				visualGap = 0;
+			}
 		}
-		else
+		if(priorityGap != COLOUR_DISABLED)
 		{
-			EmitAgiPixel(errorCoord.x, errorCoord.y, COLOUR_DISABLED, gapPixel);
+			priorityGap = sciCanvas.GetPriorityPixel(AGI_TO_SCI_X(errorCoord.x), AGI_TO_SCI_Y(errorCoord.y));
+			if(priorityGap == sciCanvas.blankPriority)
+			{
+				priorityGap = sciCanvas.GetPriorityPixel(AGI_TO_SCI_X(errorCoord.x) + 1, AGI_TO_SCI_Y(errorCoord.y));
+			}
+			if(priorityGap == sciCanvas.blankPriority)
+			{
+				priorityGap = 0;
+			}
 		}
+		
+		EmitAgiPixel(errorCoord.x, errorCoord.y, visualGap, priorityGap);
+		
+		agiCanvas.SetPixel(errorCoord.x, errorCoord.y);
 	}
+	
+	EmitAgiSetVisual(fillColour);
+	EmitAgiSetPriority(fillPriority);
+	EmitAgiFill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y));
 }
 
 void DoFill(int16_t x, int16_t y)
 {		
-	uint8_t fillColour = penColour;
-	uint8_t fillPriority = priorityColour;
+	vector<Coord> sciFilled;
 
-	vector<Coord> sciVisualFilled, sciPriorityFilled;
-	vector<Coord> agiVisualFilled, agiPriorityFilled;
-
-	if(fillColour != COLOUR_DISABLED)
-	{
-		sciVisualCanvas.Fill(x, y, fillColour, &sciVisualFilled);
-	}
-	if(priorityColour != COLOUR_DISABLED)
-	{
-		sciPriorityCanvas.Fill(x, y, fillPriority, &sciPriorityFilled);
-	}
+	sciCanvas.Fill(x, y, &sciFilled);
 	
 	// Find and fill gaps
-	if(fillColour != COLOUR_DISABLED)
-	{
-		TryFill(agiVisualCanvas, sciVisualCanvas, sciVisualFilled, x, y, fillColour, true, agiVisualFilled);
-	}
-	if(fillPriority != COLOUR_DISABLED)
-	{
-		TryFill(agiPriorityCanvas, sciPriorityCanvas, sciPriorityFilled, x, y, fillPriority, false, agiPriorityFilled);
-	}
-
-	EmitAgiSetVisual(fillColour);
-	EmitAgiSetPriority(fillPriority);
-	EmitAgiFill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y));
+	TryFill(sciFilled, x, y);
 	
 	// Check everywhere is filled correctly
-	for(Coord& c : sciVisualFilled)
+	for(Coord& c : sciFilled)
 	{
-		if(agiVisualCanvas.GetPixel(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y)) == agiVisualCanvas.defaultColour)
+		if(agiCanvas.OkToFill(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y)))
 		{
-			TryFill(agiVisualCanvas, sciVisualCanvas, sciVisualFilled, c.x, c.y, fillColour, true, agiVisualFilled);
-			EmitAgiSetVisual(fillColour);
-			EmitAgiSetPriority(COLOUR_DISABLED);
-			EmitAgiFill(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y));
+			TryFill(sciFilled, c.x, c.y);
 		}
 	}
-	
-	for(Coord& c : sciPriorityFilled)
-	{
-		if(agiPriorityCanvas.GetPixel(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y)) == agiPriorityCanvas.defaultColour)
-		{
-			TryFill(agiPriorityCanvas, sciPriorityCanvas, sciPriorityFilled, c.x, c.y, fillPriority, true, agiPriorityFilled);
-			EmitAgiSetVisual(COLOUR_DISABLED);
-			EmitAgiSetPriority(fillPriority);
-			EmitAgiFill(SCI_TO_AGI_X(c.x), SCI_TO_AGI_Y(c.y));
-		}
-	}
-	
-	EmitAgiSetVisual(fillColour);
-	EmitAgiSetPriority(fillPriority);
 }
 
 void FloodFill()
@@ -867,10 +821,8 @@ int main(int argc, char* argv[])
 
 	fclose(outputFile);
 
-	sciVisualCanvas.DumpToPNG("sci-visual.png");
-	agiVisualCanvas.DumpToPNG("agi-visual.png");
-	sciPriorityCanvas.DumpToPNG("sci-priority.png");
-	agiPriorityCanvas.DumpToPNG("agi-priority.png");
+	sciCanvas.DumpToPNG("sci-visual.png", "sci-priority.png");
+	agiCanvas.DumpToPNG("agi-visual.png", "agi-priority.png");
 
 	return 0;
 }
@@ -882,38 +834,60 @@ int round(float aNumber, float dirn)
    return ((aNumber - floor(aNumber) < 0.499)? floor(aNumber) : ceil(aNumber));
 }
 
-Canvas::Canvas(int inWidth, int inHeight, uint8_t inDefaultColour) : width(inWidth), height(inHeight), defaultColour(inDefaultColour)
+Canvas::Canvas(int inWidth, int inHeight, uint8_t priorityBlank, uint8_t visualBlank) : width(inWidth), height(inHeight), blankPriority(priorityBlank), blankVisual(visualBlank)
 {
-	data = new uint8_t[width * height];
+	visualData = new uint8_t[width * height];
+	priorityData = new uint8_t[width * height];
+	lastVisualData  = new uint8_t[width * height];
+	lastPriorityData = new uint8_t[width * height];
+	
 	for(int n = 0; n < width * height; n++)
 	{
-		data[n] = defaultColour;
+		visualData[n] = visualBlank;
+		lastVisualData[n] = visualBlank;
+		priorityData[n] = priorityBlank;
+		lastPriorityData[n] = priorityBlank;
 	}
 }
 	
 Canvas::~Canvas()
 {
-	delete[] data;
+	delete[] visualData;
+	delete[] priorityData;
+	delete[] lastVisualData;
+	delete[] lastPriorityData;
 }
 
-void Canvas::SetPixel(int x, int y, uint8_t value)
+void Canvas::SetPixel(int x, int y)
 {
 	if(x >= 0 && y >= 0 && x < width && y < height)
 	{
-		data[y * width + x] = value;
+		if(penColour != COLOUR_DISABLED)
+			visualData[y * width + x] = penColour;
+		if(priorityColour != COLOUR_DISABLED)
+			priorityData[y * width + x] = priorityColour;
 	}
 }
 
-uint8_t Canvas::GetPixel(int x, int y)
+uint8_t Canvas::GetVisualPixel(int x, int y)
 {
 	if(x >= 0 && y >= 0 && x < width && y < height)
 	{
-		return data[y * width + x];
+		return visualData[y * width + x];
+	}
+	return 0;
+}
+
+uint8_t Canvas::GetPriorityPixel(int x, int y)
+{
+	if(x >= 0 && y >= 0 && x < width && y < height)
+	{
+		return priorityData[y * width + x];
 	}
 	return 0;
 }
 	
-void Canvas::DrawLine(int x1, int y1, int x2, int y2, uint8_t colour)
+void Canvas::DrawLine(int x1, int y1, int x2, int y2)
 {
    int height, width, startX, startY;
    float x, y, addX, addY;
@@ -929,10 +903,10 @@ void Canvas::DrawLine(int x1, int y1, int x2, int y2, uint8_t colour)
       addX = (width == 0? 0 : (width/abs(width)));
       for (x=x1; x!=x2; x+=addX) 
 	  {
-		SetPixel(round(x, addX), round(y, addY), colour);
+		SetPixel(round(x, addX), round(y, addY));
 		y += addY;
       }
-      SetPixel(x2, y2, colour);
+      SetPixel(x2, y2);
    }
    else 
    {
@@ -940,33 +914,47 @@ void Canvas::DrawLine(int x1, int y1, int x2, int y2, uint8_t colour)
       addY = (height == 0? 0 : (height/abs(height)));
       for (y=y1; y!=y2; y+=addY) 
 	  {
-		SetPixel(round(x, addX), round(y, addY), colour);
+		SetPixel(round(x, addX), round(y, addY));
 		x+=addX;
       }
-      SetPixel(x2,y2, colour);
+      SetPixel(x2,y2);
    }
 
 }
 
 bool Canvas::OkToFill(int x, int y)
 {
-	return GetPixel(x, y) == defaultColour;
-}
-
-void Canvas::UnFill(vector<Coord>& filled)
-{
-	for(Coord& c : filled)
+	if(penColour == COLOUR_DISABLED && priorityColour == COLOUR_DISABLED)
+		return false;
+	if(penColour == blankVisual)
+		return false;
+	
+	if(priorityColour == COLOUR_DISABLED)
 	{
-		SetPixel(c.x, c.y, defaultColour);
+		return GetVisualPixel(x, y) == blankVisual;
+	}
+	else if(priorityColour != COLOUR_DISABLED && penColour == COLOUR_DISABLED)
+	{
+		return GetPriorityPixel(x, y) == blankPriority;
+	}
+	else
+	{
+		return GetVisualPixel(x, y) == blankVisual;
 	}
 }
 
-void Canvas::Fill(int x, int y, uint8_t colour, vector<Coord>* filled)
+void Canvas::UndoFill()
+{
+	memcpy(visualData, lastVisualData, width * height);
+	memcpy(priorityData, lastPriorityData, width * height);
+}
+
+void Canvas::Fill(int x, int y, vector<Coord>* filled)
 {
 	vector<Coord> queue;
 
-	if (colour == defaultColour)
-		return;
+	memcpy(lastVisualData, visualData, width * height);
+	memcpy(lastPriorityData, priorityData, width * height);
 	
 	queue.push_back(Coord(x, y));
 	
@@ -982,7 +970,7 @@ void Canvas::Fill(int x, int y, uint8_t colour, vector<Coord>* filled)
 
 		if (OkToFill(coord.x, coord.y)) 
 		{
-			SetPixel(coord.x, coord.y, colour);
+			SetPixel(coord.x, coord.y);
 			
 			if(filled)
 			{
@@ -1009,13 +997,13 @@ void Canvas::Fill(int x, int y, uint8_t colour, vector<Coord>* filled)
 	}
 }
 	
-void Canvas::DumpToPNG(const char* filename)
+void Canvas::DumpToPNG(const char* visualFilename, const char* priorityFilename)
 {
 	vector<uint8_t> outputData;
 	
 	for(int n = 0; n < width * height; n++)
 	{
-		int index = data[n];
+		int index = visualData[n];
 		if(index >= 16)
 		{
 			index = 0;
@@ -1026,7 +1014,25 @@ void Canvas::DumpToPNG(const char* filename)
 		outputData.push_back(0xff);
 	}
 	
-	lodepng::encode(filename, outputData, width, height);
+	lodepng::encode(visualFilename, outputData, width, height);
+	
+	outputData.clear();
+	
+	for(int n = 0; n < width * height; n++)
+	{
+		int index = priorityData[n];
+		if(index >= 16)
+		{
+			index = 0;
+		}
+		outputData.push_back(EGAPalette[index * 3]);
+		outputData.push_back(EGAPalette[index * 3 + 1]);
+		outputData.push_back(EGAPalette[index * 3 + 2]);
+		outputData.push_back(0xff);
+	}
+	
+	lodepng::encode(priorityFilename, outputData, width, height);
+
 }
 	
 	
