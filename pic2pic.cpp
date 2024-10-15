@@ -21,7 +21,7 @@
 #define AGI_DISABLE_PRIORITY 0xf3
 #define AGI_FILL_INSTRUCTION 0xf8
 
-#define AGI_OFFSET_Y -6
+int AGI_OFFSET_Y = 0;
 #define SCI_TO_AGI_X(x) ((x) / 2)
 #define SCI_TO_AGI_Y(y) ((y) + AGI_OFFSET_Y)
 #define AGI_TO_SCI_X(x) ((x) * 2)
@@ -58,6 +58,12 @@ struct Coord
 	int x, y;
 };
 
+struct ControlLine
+{
+	Coord start, end;
+	uint8_t colour;
+};
+
 struct Canvas
 {
 	Canvas(int inWidth, int inHeight, uint8_t priorityBlank = 4, uint8_t visualBlank = 0xf);
@@ -89,13 +95,14 @@ struct Canvas
 uint8_t* pictureData;
 uint8_t* pictureDataPtr;
 long pictureDataLength;
-bool verbose = true;
+bool verbose = false;
 
 bool mirroredFlag = false;
 uint16_t patternCode;
 
 uint8_t penColour = 0xff;
 uint8_t priorityColour = 0xff;
+uint8_t controlColour = 0xff;
 
 uint8_t lastAgiInstruction = 0;
 
@@ -103,6 +110,8 @@ FILE* outputFile;
 
 Canvas agiCanvas(AGI_PICTURE_WIDTH, AGI_PICTURE_HEIGHT);
 Canvas sciCanvas(SCI_PICTURE_WIDTH, SCI_PICTURE_HEIGHT);
+
+vector<ControlLine> controlLines;
 
 void WriteByte(uint8_t value)
 {
@@ -235,6 +244,17 @@ void DrawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2)
 	EmitAgiLine(x1, y1, x2, y2);
 	
 	agiCanvas.DrawLine(x1, y1, x2, y2);
+	
+	if(controlColour != COLOUR_DISABLED)
+	{
+		ControlLine line;
+		line.start.x = x1;
+		line.start.y = y1;
+		line.end.x = x2;
+		line.end.y = y2;
+		line.colour = controlColour;
+		controlLines.push_back(line);
+	}
 }
 
 uint8_t NextByte()
@@ -385,6 +405,7 @@ void SetControlColour()
 	if(verbose)
 		printf("Set control colour: %d\n", colour);
 	
+	controlColour = colour;
 	//WriteByte(0xf2);
 	//WriteByte(colour ? 1 : 0);	
 }
@@ -394,8 +415,29 @@ void DisableControl()
 	if(verbose)
 		printf("Disable control\n");
 
+	controlColour = COLOUR_DISABLED;
 	//WriteByte(0xf3);
 }
+
+void DrawPattern(int16_t x, int16_t y)
+{
+	sciCanvas.SetPixel(x, y);
+	
+	x = SCI_TO_AGI_X(x);
+	y = SCI_TO_AGI_Y(y);
+	
+	
+	if(x >= 0 && y >= 0 && x < AGI_PICTURE_WIDTH && y < AGI_PICTURE_HEIGHT)
+	{
+		agiCanvas.SetPixel(x, y);
+		EmitAgiInstruction(AGI_LINE_INSTRUCTION);
+		WriteByte(x);
+		WriteByte(y);
+		WriteByte(x);
+		WriteByte(y);
+	}
+}
+
 
 void GetPatternTexture(int16_t& patternTexture) 
 {
@@ -421,6 +463,7 @@ void ShortPatterns()
 	{
 		GetPatternTexture(patternTexture);
 		GetRelCoords(x, y);
+		DrawPattern(x, y);
 		//vectorPattern(x, y, pic_color, pic_priority, pic_control, pattern_Code, pattern_Texture);
 	}
 }
@@ -440,6 +483,7 @@ void MediumRelativePatterns()
 	{
 		GetPatternTexture(patternTexture);
 		GetRelCoordsMed(x, y);
+		DrawPattern(x, y);
 		//vectorPattern(x, y, pic_color, pic_priority, pic_control, pattern_Code, pattern_Texture);
 	}
 }
@@ -459,6 +503,7 @@ void LongPatterns()
 	{
 		GetPatternTexture(patternTexture);
 		GetAbsCoords(x, y);
+		DrawPattern(x, y);
 		//vectorPattern(x, y, pic_color, pic_priority, pic_control, pattern_Code, pattern_Texture);
 	}
 }
@@ -615,10 +660,12 @@ void TryFill(vector<Coord>& sciFilled, int16_t x, int16_t y)
 		EmitAgiPixel(errorCoord.x, errorCoord.y, visualGap, priorityGap);
 		
 		agiCanvas.SetPixel(errorCoord.x, errorCoord.y);
+		EmitAgiSetVisual(fillColour);
+		EmitAgiSetPriority(fillPriority);
 	}
 	
-	EmitAgiSetVisual(fillColour);
-	EmitAgiSetPriority(fillPriority);
+	//EmitAgiSetVisual(fillColour);
+	//EmitAgiSetPriority(fillPriority);
 	EmitAgiFill(SCI_TO_AGI_X(x), SCI_TO_AGI_Y(y));
 }
 
@@ -660,7 +707,8 @@ void SetPattern()
 {
 	patternCode = NextByte();
 	
-	printf("Set pattern: %d\n", patternCode);
+	if(verbose)
+		printf("Set pattern: %d\n", patternCode);
 }
 
 void CommandExtensions()
@@ -718,16 +766,96 @@ void CommandExtensions()
 
 int main(int argc, char* argv[])
 {
-	if(argc != 2)
+	const char* inputPath = nullptr;
+	const char* outputPath = nullptr;
+	bool dumpToPng = false;
+	
+	for(int arg = 1; arg < argc; arg++)
 	{
-		printf("Usage: %s [pic file]\n", argv[0]);
+		if(!stricmp(argv[arg], "-o"))
+		{
+			if(arg + 1 < argc)
+			{
+				if(outputPath)
+				{
+					printf("Output file specified more than once\n");
+					return 1;
+				}
+				
+				if(argv[arg + 1][0] == '-')
+				{
+					printf("No output path specified after -o\n");
+					return 1;
+				}
+				outputPath = argv[arg + 1];
+				arg++;
+			}
+			else
+			{
+				printf("No output path specified after -o\n");
+				return 1;
+			}
+		}
+		else if(!stricmp(argv[arg], "-d"))
+		{
+			dumpToPng = true;
+		}
+		else if(!stricmp(argv[arg], "-v"))
+		{
+			verbose = true;
+		}
+		else if(!stricmp(argv[arg], "-y"))
+		{
+			if(arg + 1 < argc)
+			{
+				AGI_OFFSET_Y = atoi(argv[arg + 1]);
+				if(AGI_OFFSET_Y > 0 || AGI_OFFSET_Y < (168 - 190))
+				{
+					printf("Offset %d is out of range\n", AGI_OFFSET_Y);
+					return 1;
+				}
+				
+				arg++;
+			}
+			else
+			{
+				printf("Expected number after -y\n");
+				return 1;
+			}
+		}
+		else
+		{
+			if(!inputPath)
+			{
+				inputPath = argv[arg];
+			}
+			else
+			{
+				printf("Unexpected argument %s\n", argv[arg]);
+				return 1;
+			}
+		}
+	}
+	
+	if(!inputPath)
+	{
+		printf("Usage: pic2pic [options] [input file]\n"
+				"-o [path] To specify output path\n"
+				"-d To dump files to PNG\n"
+				"-v verbose mode\n"
+				"-y [value] offset y output\n");
 		return 1;
 	}
 	
-	FILE* fileStream = fopen(argv[1], "rb");
+	if(!outputPath)
+	{
+		outputPath = "output.pic";
+	}
+	
+	FILE* fileStream = fopen(inputPath, "rb");
 	if(!fileStream)
 	{
-		printf("Could not open %s\n", argv[1]);
+		printf("Could not open %s\n", inputPath);
 		return 1;
 	}
 	
@@ -738,7 +866,7 @@ int main(int argc, char* argv[])
 	fread(pictureData, pictureDataLength, 1, fileStream);
 	fclose(fileStream);
 
-	outputFile = fopen("output.pic", "wb");
+	outputFile = fopen(outputPath, "wb");
 	if(!outputFile)
 	{
 		printf("Could not open file for write\n");
@@ -817,9 +945,26 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	if(controlLines.size() > 0)
+	{
+		EmitAgiInstruction(AGI_DISABLE_VISUAL);
+		EmitAgiInstruction(AGI_SET_PRIORITY);
+		WriteByte(0);
+		
+		for(ControlLine& line : controlLines)
+		{
+			if(line.colour == 0xf)
+			{
+				EmitAgiLine(line.start.x, line.start.y, line.end.x, line.end.y);
+			}
+		}
+	}
+
 	WriteByte(0xff);
 
 	fclose(outputFile);
+	
+	printf("Data written to %s\n", outputPath);
 
 	sciCanvas.DumpToPNG("sci-visual.png", "sci-priority.png");
 	agiCanvas.DumpToPNG("agi-visual.png", "agi-priority.png");
