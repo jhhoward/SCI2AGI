@@ -50,6 +50,8 @@ int GetFValue(float frequency)
 	return result;
 }
 
+#define VOLUME_SHIFT 3
+
 struct OutputChannel
 {
 	OutputChannel() : lastTime(0) {}
@@ -57,7 +59,7 @@ struct OutputChannel
 	// f = 111860 / (((Byte2 & 0x3F) << 4) + (Byte1 & 0x0F))
 	// val = 111860 / frequency
 	
-	void ChangeFrequency(float freq, float time)
+	void ChangeFrequency(float freq, int volume, float time)
 	{
 		if(freq == frequency)
 			return;
@@ -65,12 +67,12 @@ struct OutputChannel
 		float deltaTime = time - lastTime;
 		int ticks = (int)(deltaTime / (1.0f / 60.0f));
 		
-		if(ticks > 0)
+		//if(ticks > 0)
 		{
 			if(verbose)
 			{
 				if(frequency > 0)
-					printf("%d [%d] %f : Note on: %f\n", channelIndex, ticks, lastTime, frequency);
+					printf("%d [%d] %f : Note on: %f %d\n", channelIndex, ticks, lastTime, frequency, lastVolume);
 				else
 					printf("%d [%d] %f : Note off\n", channelIndex, ticks, lastTime);
 			}
@@ -82,11 +84,18 @@ struct OutputChannel
 				//tone &= 0x7ff;
 				//if(tone > 0x7ff)
 				//	tone = 0x7ff;
+			
+				int calcVolume = (100 * lastVolume) >> VOLUME_SHIFT;
+				int attenuation = 15 - (lastVolume * 15) / 100;
+				if(attenuation < 0)
+					attenuation = 0;
 				
 				//uint8_t param1 = (tone >> 4) | (0x80) | (channelIndex << 4);
 				//uint8_t param2 = tone & 0xf;
 				uint8_t param1 = tone & 0xf;
 				uint8_t param2 = (tone >> 4) & 0x3f;
+				
+				attenuation = channelIndex ? 7 : 0;
 				
 				#if 1
 				{
@@ -96,7 +105,8 @@ struct OutputChannel
 					outputStream.push_back(param2);
 					outputStream.push_back(param1);
 
-					outputStream.push_back(0x00);
+					outputStream.push_back(attenuation);
+					//outputStream.push_back(0x00);
 				}
 				#else
 				{
@@ -138,6 +148,7 @@ struct OutputChannel
 		
 		frequency = freq;
 		lastTime = time;
+		lastVolume = volume;
 	}
 
 	void Close()
@@ -149,6 +160,7 @@ struct OutputChannel
 	vector<uint8_t> outputStream;
 	float frequency = 0;
 	float lastTime = 0.0f;
+	int lastVolume = 0;
 	int channelIndex;
 	int borrowedTicks = 0;
 };
@@ -181,6 +193,7 @@ int get_freq(int note) {
 }
 
 int channelMapping[NUM_INPUT_CHANNELS];
+int sciChannelFrequency[NUM_INPUT_CHANNELS];
 OutputChannel outputChannels[NUM_OUTPUT_CHANNELS];
 
 int main(int argc, char* argv[])
@@ -358,8 +371,21 @@ int main(int argc, char* argv[])
 			// Note on
 			if(channelMapping[ev.channel] != -1)
 			{
-				outputChannels[channelMapping[ev.channel]].ChangeFrequency(param2 ? get_freq(param1) : 0, time);
-				//outputChannels[channelMapping[ev.channel]].ChangeFrequency(get_freq(param1), time);
+				//printf("%d Note on %d %d\n", ev.channel, param1, param2);
+				
+				if(!param2)
+				{
+					if(sciChannelFrequency[ev.channel] == param1)
+					{
+						outputChannels[channelMapping[ev.channel]].ChangeFrequency(0, 0, time);
+						sciChannelFrequency[ev.channel] = 0;
+					}
+				}
+				else
+				{
+					outputChannels[channelMapping[ev.channel]].ChangeFrequency(get_freq(param1), param2, time);
+					sciChannelFrequency[ev.channel] = param1;
+				}
 			}
 		}
 		else if(ev.command == 0x8)
@@ -367,7 +393,13 @@ int main(int argc, char* argv[])
 			// Note off
 			if(channelMapping[ev.channel] != -1)
 			{
-				outputChannels[channelMapping[ev.channel]].ChangeFrequency(0, time);
+				//printf("%d Note off %d %d\n", ev.channel, param1, param2);
+				
+				if(sciChannelFrequency[ev.channel] == param1)
+				{
+					outputChannels[channelMapping[ev.channel]].ChangeFrequency(0, 0, time);
+					sciChannelFrequency[ev.channel] = 0;
+				}
 			}
 		}
 		else if(ev.command == 0xb)
@@ -388,7 +420,7 @@ int main(int argc, char* argv[])
 				{
 					if(verbose)
 						printf("Control sound off\n");
-					outputChannels[channelMapping[ev.channel]].ChangeFrequency(0, time);
+					outputChannels[channelMapping[ev.channel]].ChangeFrequency(0, 0, time);
 				}
 			}
 		}
