@@ -940,7 +940,7 @@ int main(int argc, char* argv[])
 			
 			default:
 			printf("Unknown instruction! %x\n", instruction);
-			parsing = false;
+			//parsing = false;
 			break;
 		}
 	}
@@ -954,6 +954,16 @@ int main(int argc, char* argv[])
 		for(ControlLine& line : controlLines)
 		{
 			if(line.colour == 0xf)
+			{
+				EmitAgiLine(line.start.x, line.start.y, line.end.x, line.end.y);
+			}
+		}
+
+		EmitAgiInstruction(AGI_SET_PRIORITY);
+		WriteByte(2);
+		for(ControlLine& line : controlLines)
+		{
+			if(line.colour != 0xf)
 			{
 				EmitAgiLine(line.start.x, line.start.y, line.end.x, line.end.y);
 			}

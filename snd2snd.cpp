@@ -128,7 +128,19 @@ struct OutputChannel
 				
 				command.param1 = tone & 0xf;
 				command.param2 = (tone >> 4) & 0x3f;
-				command.attenuation = channelIndex ? 7 : 0;
+				
+				switch(channelIndex)
+				{
+					case 0:
+					command.attenuation = 0;
+					break;
+					case NOISE_CHANNEL:
+					command.attenuation = 10;
+					break;
+					default:
+					command.attenuation = 7;
+					break;
+				}
 			}
 			else
 			{
