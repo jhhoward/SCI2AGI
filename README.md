@@ -13,6 +13,8 @@ Available command line arguments:
 
 NOTE: The way that priority bands are configured in SCI and AGI differ which can lead to some problems with how object appear in relation to background elements (e.g. sprites appearing in front of background elements that they should be behind). The best solution I could come up with is to use the AGI command `set.pri.base(63);` which reconfigures the priority bands to be closer in spacing and positioning to SCI's default setup. You will need to use an AGI interpreter of version 2.936 or above to use this.
 
+PIC2PIC will make a best effort to avoid flood fill issues but some can still occur due to the change in resolution between AGI and SCI backgrounds. One other limitation is that the pattern brush commands are not fully implemented so some pictures may contain missing details.
+
 ## VIEW2VIEW
 Converts an AGI sprite VIEW resource to a SCI VIEW resource.
 ```
