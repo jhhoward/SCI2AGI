@@ -167,10 +167,9 @@ int main(int argc, char* argv[])
 	if(!inputPath)
 	{
 		printf("Usage: pic2pic [options] [input file]\n"
-				"-o [path] To specify output path\n"
+				"-o [path] To specify output path (default is output.view)\n"
 				"-d To dump files to PNG\n"
-				"-v verbose mode\n"
-				"-y [value] offset y output\n");
+				"-v verbose mode\n");
 		return 1;
 	}
 	

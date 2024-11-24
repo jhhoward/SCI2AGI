@@ -280,8 +280,9 @@ int main(int argc, char* argv[])
 	if(!inputPath)
 	{
 		printf("Usage: snd2snd [options] [input file]\n"
-				"-o [path] To specify output path\n"
-				"-v verbose mode\n");
+				"-o [path] To specify output path (default is output.snd)\n"
+				"-v verbose mode\n"
+				"-c manually map SCI tracks to AGI voices (e.g -c=4,1,2 maps SCI tracks 4, 1 and 2 to the three AGI voices)\n");
 		return 1;
 	}
 	
